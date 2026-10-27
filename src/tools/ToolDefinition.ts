@@ -397,6 +397,7 @@ export type Context = Readonly<{
  * connection.
  */
 export type BrowserlessContext = Readonly<{
+  closeBrowser(): Promise<void>;
   getHeapSnapshotAggregates(
     filePath: string,
     filterName?: string,

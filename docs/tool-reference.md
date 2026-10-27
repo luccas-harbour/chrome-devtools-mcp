@@ -13,7 +13,8 @@
   - [`type_text`](#type_text)
   - [`upload_file`](#upload_file)
   - [`click_at`](#click_at)
-- **[Navigation automation](#navigation-automation)** (6 tools)
+- **[Navigation automation](#navigation-automation)** (7 tools)
+  - [`close_browser`](#close_browser)
   - [`close_page`](#close_page)
   - [`list_pages`](#list_pages)
   - [`navigate_page`](#navigate_page)
@@ -204,6 +205,14 @@
 ---
 
 ## Navigation automation
+
+### `close_browser`
+
+**Description:** Releases this MCP server's browser session. Closes a browser launched by this server, or disconnects from an attached browser without closing it. Does nothing if no browser is open. Keeps the MCP server running; the next browser tool starts or reconnects a browser. Save evidence and stop recordings and traces before calling this tool.
+
+**Parameters:** None
+
+---
 
 ### `close_page`
 

@@ -10,6 +10,40 @@ automation, in-depth debugging, and performance analysis.
 
 [Tool reference][tool-reference] | [CLI][cli] | [Skills][skills] | [Changelog][changelog] | [Contributing][contributing] | [Troubleshooting][troubleshooting] | [Design Principles][design-principles]
 
+## Browser cleanup in this fork
+
+This fork adds `close_browser` to release the current MCP server's browser
+session after debugging. It closes Chrome launched by that server, including
+its last tab. When attached to an existing browser, it disconnects and leaves
+that browser running. Calling it before a browser opens or after cleanup is
+harmless and does not launch Chrome.
+The tool is available in the standard toolset; `--slim` excludes it.
+
+Save evidence and stop recordings and traces before cleanup. The MCP server
+stays running, and a later browser tool can open or reconnect a browser.
+Ownership is per MCP server session: agents sharing a server must coordinate
+cleanup. Use `--isolated` for independent sessions.
+
+Build this checkout with `npm ci` and `npm run build`, then configure your MCP
+client to run its compiled entry point:
+
+```json
+{
+  "mcpServers": {
+    "chrome-devtools": {
+      "command": "node",
+      "args": [
+        "/absolute/path/to/chrome-devtools-mcp/build/src/bin/chrome-devtools-mcp.js",
+        "--isolated"
+      ]
+    }
+  }
+}
+```
+
+Restart the MCP server or client after updating its configuration. The npm
+package `chrome-devtools-mcp@latest` still runs the upstream version.
+
 ## Key features
 
 - **Get performance insights**: Uses [Chrome

@@ -125,6 +125,56 @@ describe('McpContext', () => {
     );
   }
 
+  describe('closeBrowser', () => {
+    it('refuses cleanup without a lifecycle owner and does not connect', async () => {
+      const getBrowser = sinon.stub<[], Promise<Browser>>();
+      const taskRunner = new TaskRunner();
+      const context = McpContext.create(undefined, {
+        config: createMockServerConfig(),
+        heapSnapshotManager: new HeapSnapshotManager(taskRunner),
+        taskRunner,
+        getBrowser,
+      });
+
+      await assert.rejects(
+        context.closeBrowser(),
+        /Browser lifecycle is not managed by this context/,
+      );
+
+      sinon.assert.notCalled(getBrowser);
+      context.dispose();
+    });
+
+    it('clears browser state and listeners before invoking the lifecycle owner', async () => {
+      const browser = createMockPuppeteerBrowser();
+      const getBrowser = sinon.stub<[], Promise<Browser>>().resolves(browser);
+      const closeBrowser = sinon.stub<[], Promise<void>>().resolves();
+      const taskRunner = new TaskRunner();
+      const context = McpContext.create(undefined, {
+        config: createMockServerConfig(),
+        heapSnapshotManager: new HeapSnapshotManager(taskRunner),
+        taskRunner,
+        getBrowser,
+        closeBrowser,
+      });
+      await context.ensureBrowser();
+      assert.strictEqual(context.browser, browser);
+      closeBrowser.callsFake(async () => {
+        assert.throws(() => context.browser, /Not connected to a browser/);
+        assert.strictEqual(browser.listenerCount('targetcreated'), 0);
+        assert.strictEqual(browser.listenerCount('targetdestroyed'), 0);
+      });
+
+      await context.closeBrowser();
+
+      sinon.assert.calledOnceWithExactly(closeBrowser);
+      sinon.assert.calledOnceWithExactly(getBrowser);
+      sinon.assert.notCalled(browser.close);
+      sinon.assert.notCalled(browser.disconnect);
+      context.dispose();
+    });
+  });
+
   describe('getServiceWorkerConsoleData', () => {
     it('resolves the service worker ID to the collector extension ID', async () => {
       const browser = createMockPuppeteerBrowser();

@@ -73,6 +73,8 @@ export interface McpContextOptions {
   // Returns the browser to use. Called by ensureBrowser(), so the browser
   // connection is only established once a tool needs it.
   getBrowser: () => Promise<Browser>;
+  // Releases the browser through its owner without establishing a connection.
+  closeBrowser?: () => Promise<void>;
 }
 
 interface OptionGate {
@@ -370,6 +372,14 @@ export class McpContext implements Context, BrowserlessContext {
       }
       throw err;
     }
+  }
+
+  async closeBrowser(): Promise<void> {
+    if (!this.#options.closeBrowser) {
+      throw new Error('Browser lifecycle is not managed by this context.');
+    }
+    this.#resetBrowserState();
+    await this.#options.closeBrowser();
   }
 
   async #initBrowserState(browser: Browser): Promise<void> {

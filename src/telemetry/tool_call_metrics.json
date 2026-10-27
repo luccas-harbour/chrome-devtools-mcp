@@ -1396,5 +1396,9 @@
         "argType": "boolean"
       }
     ]
+  },
+  {
+    "name": "close_browser",
+    "args": []
   }
 ]

@@ -120,6 +120,7 @@ export class McpServer {
       heapSnapshotManager: this.#heapSnapshotManager,
       taskRunner: this.#taskRunner,
       getBrowser: () => this.#browserManager.ensureBrowser(),
+      closeBrowser: () => this.#browserManager.close(),
     });
     this.#context.setRoots(this.#combinedRoots());
 

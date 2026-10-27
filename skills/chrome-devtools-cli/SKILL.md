@@ -61,6 +61,7 @@ chrome-devtools upload_file 1 "id" "file.txt" --includeSnapshot true # Upload a 
 ## Navigation
 
 ```bash
+chrome-devtools close_browser # Release this daemon's browser session
 chrome-devtools close_page 1 # Closes the page by its index
 chrome-devtools list_pages # Get a list of pages open in the browser
 chrome-devtools navigate_page 1 --url "https://example.com" # Navigates the currently selected page to a URL

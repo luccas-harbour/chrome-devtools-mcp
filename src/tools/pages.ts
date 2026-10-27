@@ -12,13 +12,44 @@ import {validateUrl} from '../utils/url.js';
 import {ToolCategory} from './categories.js';
 import {
   CLOSE_PAGE_ERROR,
+  type BrowserlessToolFactory,
   type ContextPage,
+  defineBrowserlessTool,
   definePageTool,
   defineTool,
   type PageToolFactory,
   timeoutSchema,
   type ToolFactory,
 } from './ToolDefinition.js';
+
+export const closeBrowser: BrowserlessToolFactory = defineBrowserlessTool(
+  () => ({
+    name: 'close_browser',
+    description:
+      "Releases this MCP server's browser session. Closes a browser " +
+      'launched by this server, or disconnects from an attached browser ' +
+      'without closing ' +
+      'it. Does nothing if no browser is open. Keeps the MCP server running; ' +
+      'the next browser tool starts or reconnects a browser. Save evidence and ' +
+      'stop recordings and traces before calling this tool.',
+    annotations: {
+      category: ToolCategory.NAVIGATION,
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: true,
+    },
+    schema: {},
+    blockedByDialog: false,
+    concurrency: 'exclusive',
+    verifyFilesSchema: {},
+    handler: async (_request, response, context) => {
+      await context.closeBrowser();
+      response.appendResponseLine(
+        'Browser session released. The MCP server is still running.',
+      );
+    },
+  }),
+);
 
 export const listPages: ToolFactory = defineTool((args: ParsedArguments) => {
   return {

@@ -8,6 +8,7 @@ import assert from 'node:assert';
 import os from 'node:os';
 import path from 'node:path';
 import {describe, it} from 'node:test';
+import {setImmediate} from 'node:timers/promises';
 
 import {executablePath} from 'puppeteer';
 import sinon from 'sinon';
@@ -16,6 +17,7 @@ import {BrowserManager} from '../src/BrowserManager.js';
 import {puppeteer, type Browser} from '../src/third_party/index.js';
 
 import {
+  createMockChildProcess,
   createMockPuppeteerBrowser,
   createMockPuppeteerTarget,
   createMockServerConfig,
@@ -63,6 +65,135 @@ describe('browser', () => {
   });
 
   describe('BrowserManager', () => {
+    it('waits for the owned Chrome process to exit after forced shutdown', async () => {
+      const browser = createMockPuppeteerBrowser();
+      const child = createMockChildProcess();
+      const killCalled = Promise.withResolvers<void>();
+      browser.process.returns(child);
+      browser.close.rejects(new Error('Chrome is unresponsive'));
+      child.kill.callsFake(() => {
+        killCalled.resolve();
+        return true;
+      });
+      sinon.stub(puppeteer, 'launch').resolves(browser);
+      const manager = new BrowserManager(
+        createMockServerConfig({isolated: true}),
+      );
+      await manager.ensureBrowser();
+
+      let finished = false;
+      const closing = manager.close().then(() => {
+        finished = true;
+      });
+      await killCalled.promise;
+      await setImmediate();
+      assert.strictEqual(finished, false);
+      assert.strictEqual(child.listenerCount('exit'), 1);
+      Object.defineProperty(child, 'signalCode', {value: 'SIGKILL'});
+      child.emit('exit', null, 'SIGKILL');
+      await closing;
+
+      sinon.assert.calledOnceWithExactly(child.kill, 'SIGKILL');
+      sinon.assert.notCalled(browser.disconnect);
+      assert.strictEqual(child.listenerCount('exit'), 0);
+    });
+
+    it('reports an owned Chrome process that does not exit after shutdown', async () => {
+      const browser = createMockPuppeteerBrowser();
+      const child = createMockChildProcess();
+      const killCalled = Promise.withResolvers<void>();
+      const timeout = new AbortController();
+      sinon.stub(AbortSignal, 'timeout').returns(timeout.signal);
+      browser.process.returns(child);
+      browser.close.rejects(new Error('Chrome is unresponsive'));
+      child.kill.callsFake(() => {
+        killCalled.resolve();
+        return true;
+      });
+      sinon.stub(puppeteer, 'launch').resolves(browser);
+      const manager = new BrowserManager(
+        createMockServerConfig({isolated: true}),
+      );
+      await manager.ensureBrowser();
+
+      const closing = assert.rejects(
+        manager.close(),
+        /Chrome process .* did not exit within 5000 ms/,
+      );
+      await killCalled.promise;
+      timeout.abort();
+      await closing;
+
+      sinon.assert.calledOnceWithExactly(child.kill, 'SIGKILL');
+      sinon.assert.notCalled(browser.disconnect);
+      assert.strictEqual(child.listenerCount('exit'), 0);
+    });
+
+    for (const event of ['abandoned', 'disconnected']) {
+      it(`waits for ${event} browser shutdown in the background`, async () => {
+        const browser = createMockPuppeteerBrowser();
+        const stopped = Promise.withResolvers<void>();
+        browser.close.returns(stopped.promise);
+        sinon.stub(puppeteer, 'launch').resolves(browser);
+        const manager = new BrowserManager(
+          createMockServerConfig({isolated: true}),
+        );
+        await manager.ensureBrowser();
+
+        if (event === 'abandoned') {
+          manager.abandonPendingAttempt();
+        } else {
+          browser.emit('disconnected', undefined);
+        }
+        let finished = false;
+        const closing = manager.close().then(() => {
+          finished = true;
+        });
+        try {
+          await setImmediate();
+          assert.strictEqual(finished, false);
+          sinon.assert.calledOnceWithExactly(browser.close);
+          sinon.assert.notCalled(browser.disconnect);
+        } finally {
+          stopped.resolve();
+          await closing;
+        }
+      });
+    }
+
+    it('reports and clears background shutdown failures', async () => {
+      const browser = createMockPuppeteerBrowser();
+      browser.close.rejects(new Error('Background shutdown failed'));
+      sinon.stub(puppeteer, 'launch').resolves(browser);
+      const manager = new BrowserManager(
+        createMockServerConfig({isolated: true}),
+      );
+      await manager.ensureBrowser();
+      manager.abandonPendingAttempt();
+      await setImmediate();
+
+      await assert.rejects(manager.close(), /Background shutdown failed/);
+      await manager.close();
+
+      sinon.assert.calledOnceWithExactly(browser.close);
+      sinon.assert.notCalled(browser.disconnect);
+    });
+
+    it('reports an attached browser disconnect failure without closing it', async () => {
+      const browser = createMockPuppeteerBrowser();
+      browser.disconnect.rejects(new Error('Disconnect failed'));
+      sinon.stub(puppeteer, 'connect').resolves(browser);
+      const manager = new BrowserManager(
+        createMockServerConfig({browserUrl: 'http://127.0.0.1:9222'}),
+      );
+      await manager.ensureBrowser();
+
+      await assert.rejects(manager.close(), /Disconnect failed/);
+
+      sinon.assert.calledOnceWithExactly(browser.disconnect);
+      sinon.assert.notCalled(browser.close);
+    });
+
     it('preserves WebSocket connection credentials for Puppeteer while redacting logs', async () => {
       const pptrBrowser = createMockPuppeteerBrowser();
       const connectStub = sinon

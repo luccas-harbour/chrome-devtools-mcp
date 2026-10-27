@@ -24,6 +24,8 @@
 
 import './setupDevTools.js';
 
+import {ChildProcess} from 'node:child_process';
+
 import type {Frame, Mouse, SerializedAXNode} from 'puppeteer-core';
 import sinon from 'sinon';
 
@@ -202,6 +204,21 @@ export function mockListener(): {
   };
 }
 
+export function createMockChildProcess(): sinon.SinonStubbedInstance<ChildProcess> {
+  const child = sinon.createStubInstance(ChildProcess);
+  Object.defineProperties(child, {
+    exitCode: {value: null, configurable: true},
+    signalCode: {value: null, configurable: true},
+  });
+  child.on.callThrough();
+  child.once.callThrough();
+  child.removeListener.callThrough();
+  child.listenerCount.callThrough();
+  child.emit.callThrough();
+  child.kill.returns(true);
+  return child;
+}
+
 export function createMockPuppeteerBrowser(): sinon.SinonStubbedInstance<Browser> {
   const browser = sinon.createStubInstance(
     CdpBrowser,
@@ -216,6 +233,9 @@ export function createMockPuppeteerBrowser(): sinon.SinonStubbedInstance<Browser
   browser.process.returns(null);
 
   const browserListener = mockListener();
+  browser.listenerCount.callsFake(eventName =>
+    browserListener.listenerCount(eventName),
+  );
   browser.on.callsFake((eventName, handler) => {
     browserListener.on(eventName, handler);
     return browser;

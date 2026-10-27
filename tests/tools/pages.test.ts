@@ -20,6 +20,7 @@ import {
   resizePage,
   handleDialog,
   getTabId,
+  closeBrowser,
 } from '../../src/tools/pages.js';
 import {zod} from '../../src/third_party/index.js';
 import {
@@ -44,6 +45,21 @@ const EXTENSION_SIDE_PANEL_PATH = path.join(
 );
 
 describe('pages', () => {
+  describe('close_browser', () => {
+    it('releases the current browser without requesting page output', async () => {
+      const {context, response, args} = createHandlerMocks();
+
+      await closeBrowser(args).handler({params: {}}, response, context);
+
+      sinon.assert.calledOnceWithExactly(context.closeBrowser);
+      sinon.assert.calledOnceWithExactly(
+        response.appendResponseLine,
+        'Browser session released. The MCP server is still running.',
+      );
+      sinon.assert.notCalled(response.setIncludePages);
+    });
+  });
+
   describe('list_pages', () => {
     it('list pages', async () => {
       const {context, response, args} = createHandlerMocks();

@@ -8,6 +8,7 @@ import assert from 'node:assert';
 import fs from 'node:fs';
 import path from 'node:path';
 import {afterEach, describe, it} from 'node:test';
+import {setImmediate} from 'node:timers/promises';
 import {pathToFileURL} from 'node:url';
 
 import {Client, InMemoryTransport} from '@modelcontextprotocol/client';
@@ -201,6 +202,113 @@ describe('McpServer', () => {
       assert.match(result.content[0].text, /## Heap Snapshot Data/);
       sinon.assert.notCalled(browserManager.ensureBrowser);
       await server.close();
+    });
+  });
+
+  describe('close_browser', () => {
+    it('releases the session repeatedly without launching a browser', async () => {
+      const {server, browserManager} = await createTestServer([], {
+        mockContext: false,
+      });
+      try {
+        for (let i = 0; i < 2; i++) {
+          const result = await server.callTool('close_browser');
+          assert.strictEqual(result.isError, undefined);
+          assert.match(
+            JSON.stringify(result.content),
+            /Browser session released/,
+          );
+        }
+        sinon.assert.calledTwice(browserManager.close);
+        sinon.assert.calledWithExactly(browserManager.close.firstCall);
+        sinon.assert.calledWithExactly(browserManager.close.secondCall);
+        sinon.assert.notCalled(browserManager.ensureBrowser);
+      } finally {
+        await server.close();
+      }
+    });
+
+    it('rejects arbitrary process targets before cleanup', async () => {
+      const {server, browserManager} = await createTestServer([], {
+        mockContext: false,
+      });
+      try {
+        const result = await server.callTool('close_browser', {pid: 123});
+        assert.strictEqual(result.isError, true);
+        assert.match(
+          JSON.stringify(result.content),
+          /Invalid arguments for tool close_browser/,
+        );
+        sinon.assert.notCalled(browserManager.close);
+        sinon.assert.notCalled(browserManager.ensureBrowser);
+      } finally {
+        await server.close();
+      }
+    });
+
+    it('advertises and dispatches cleanup over MCP', async () => {
+      const {server, browserManager} = await createTestServer([], {
+        mockContext: false,
+      });
+      const client = await connectClient(server);
+      try {
+        const {tools} = await client.listTools();
+        const tool = tools.find(tool => tool.name === 'close_browser');
+        assert.ok(tool);
+        assert.strictEqual(tool.annotations?.idempotentHint, true);
+
+        const result = await client.callTool({name: 'close_browser'});
+        assert.strictEqual(result.isError, undefined);
+        sinon.assert.calledOnceWithExactly(browserManager.close);
+        sinon.assert.notCalled(browserManager.ensureBrowser);
+      } finally {
+        await client.close();
+        await server.close();
+      }
+    });
+
+    it('reports cleanup failures without launching a replacement browser', async () => {
+      const {server, browserManager} = await createTestServer([], {
+        mockContext: false,
+      });
+      browserManager.close.onFirstCall().rejects(new Error('Shutdown failed'));
+      try {
+        const result = await server.callTool('close_browser');
+        assert.strictEqual(result.isError, true);
+        assert.match(JSON.stringify(result.content), /Shutdown failed/);
+        sinon.assert.calledOnceWithExactly(browserManager.close);
+        sinon.assert.notCalled(browserManager.ensureBrowser);
+      } finally {
+        await server.close();
+      }
+    });
+
+    it('waits for in-flight browser work before releasing the session', async () => {
+      const {server, context} = await createTestServer();
+      const entered = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      context.ensureBrowser.callsFake(async () => {
+        entered.resolve();
+        await release.promise;
+        return createMockPuppeteerBrowser();
+      });
+      try {
+        const work = server.callTool('list_pages');
+        await entered.promise;
+        const cleanup = server.callTool('close_browser');
+        await setImmediate();
+        sinon.assert.notCalled(context.closeBrowser);
+
+        release.resolve();
+        const [workResult, cleanupResult] = await Promise.all([work, cleanup]);
+        assert.strictEqual(workResult.isError, undefined);
+        assert.strictEqual(cleanupResult.isError, undefined);
+        sinon.assert.calledOnceWithExactly(context.closeBrowser);
+        sinon.assert.calledOnceWithExactly(context.ensureBrowser);
+      } finally {
+        release.resolve();
+        await server.close();
+      }
     });
   });
 

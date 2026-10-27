@@ -5,6 +5,7 @@
  */
 
 import {execSync} from 'node:child_process';
+import {once} from 'node:events';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -41,6 +42,7 @@ export class BrowserManager {
   #initPromise?: Promise<Browser>;
   #mutex = new Mutex();
   #closingCount = 0;
+  #pendingTeardowns = new Set<Promise<void>>();
   #config: ReadonlyServerConfig;
   #options: BrowserManagerOptions;
 
@@ -446,11 +448,8 @@ export class BrowserManager {
   }
 
   /**
-   * Drops the cached browser handle so the next ensureBrowser() call
-   * establishes a fresh connection. Only called from abandonPendingAttempt()
-   * when a getContext()-level timeout fires after ensureBrowser() already
-   * resolved, which means the handle looks connected but its CDP
-   * initialization is hanging.
+   * Drops the cached browser handle after a timeout or disconnect so the next
+   * ensureBrowser() call establishes a fresh connection.
    *
    * Also tears the browser down in the background: closes it if it was
    * launched (so the Chrome subprocess doesn't leak), or disconnects if it
@@ -467,32 +466,38 @@ export class BrowserManager {
     this.#browser = undefined;
     this.#browserMode = undefined;
     if (mode === 'launched') {
-      void this.#closeLaunchedBrowser(browser);
+      this.#trackTeardown(this.#closeLaunchedBrowser(browser));
     } else {
-      void browser.disconnect().catch(err => {
-        logger?.('Failed to disconnect forgotten browser', err);
-      });
+      this.#trackTeardown(browser.disconnect());
     }
+  }
+
+  #trackTeardown(teardown: Promise<void>): void {
+    this.#pendingTeardowns.add(teardown);
+    void teardown.then(
+      () => this.#pendingTeardowns.delete(teardown),
+      err => logger?.('Failed to release forgotten browser', err),
+    );
   }
 
   /**
    * Handles a `disconnected` event fired by a browser we hold: clears the
    * cached handle if it's still the current one, so the next ensureBrowser()
    * call reconnects proactively rather than only discovering the staleness
-   * lazily on the next call's `!this.#browser?.connected` check. No teardown
-   * here — the browser is already disconnected/closed, that's why this
-   * fired. The identity guard makes a `disconnected` that fires late on an
-   * already-superseded browser a safe no-op.
+   * lazily on the next call's `!this.#browser?.connected` check. Releases any
+   * owned Chrome process that outlives its connection. The identity guard
+   * makes a `disconnected` that fires late on an already-superseded browser a
+   * safe no-op.
    */
   #evictIfCurrent(candidate: Browser): void {
     if (this.#browser !== candidate) {
       return;
     }
-    this.#browser = undefined;
-    this.#browserMode = undefined;
+    this.#forgetCurrentBrowser();
   }
 
   async #closeLaunchedBrowser(browser: Browser): Promise<void> {
+    const browserProcess = browser.process();
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       await Promise.race([
@@ -507,9 +512,28 @@ export class BrowserManager {
       ]);
     } catch (err) {
       logger?.('Failed to close browser', err);
-      browser.process()?.kill('SIGKILL');
+      if (!browserProcess) {
+        throw err;
+      }
+      browserProcess.kill('SIGKILL');
     } finally {
       clearTimeout(timer);
+    }
+    if (
+      browserProcess &&
+      browserProcess.exitCode === null &&
+      browserProcess.signalCode === null
+    ) {
+      try {
+        await once(browserProcess, 'exit', {
+          signal: AbortSignal.timeout(5_000),
+        });
+      } catch (err) {
+        throw new Error(
+          `Chrome process ${browserProcess.pid} did not exit within 5000 ms.`,
+          {cause: err},
+        );
+      }
     }
   }
 
@@ -518,30 +542,41 @@ export class BrowserManager {
     const mode = this.#browserMode;
     this.#browser = undefined;
     this.#browserMode = undefined;
-    if (!browser || !browser.connected) {
+    if (!browser) {
       return;
     }
     if (mode === 'launched') {
       await this.#closeLaunchedBrowser(browser);
       return;
     }
-    await browser.disconnect().catch(err => {
-      logger?.('Failed to disconnect from browser', err);
-    });
+    if (browser.connected) {
+      await browser.disconnect();
+    }
   }
 
   /**
    * Shutdown hook for the active browser. Closes a launched browser (so the
    * Chrome subprocess is reaped) or disconnects from an attached browser (so
-   * the user's Chrome instance stays alive). No-op if no browser is active or
-   * the connection has already been dropped.
+   * the user's Chrome instance stays alive). Waits for background teardown
+   * of abandoned or disconnected browsers and reports any shutdown failure.
    */
   async close(): Promise<void> {
     this.#initPromise = undefined;
     this.#closingCount++;
     using guard = await this.#mutex.acquire();
     try {
-      await this.#closeBrowser();
+      const pending = [...this.#pendingTeardowns];
+      const results = await Promise.allSettled([
+        this.#closeBrowser(),
+        ...pending,
+      ]);
+      for (const teardown of pending) {
+        this.#pendingTeardowns.delete(teardown);
+      }
+      const failed = results.find(result => result.status === 'rejected');
+      if (failed) {
+        throw failed.reason;
+      }
     } finally {
       this.#closingCount--;
     }

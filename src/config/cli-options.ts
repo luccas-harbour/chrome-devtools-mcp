@@ -164,6 +164,12 @@ export const commands: Commands = {
       },
     },
   },
+  close_browser: {
+    description:
+      "Releases this MCP server's browser session. Closes a browser launched by this server, or disconnects from an attached browser without closing it. Does nothing if no browser is open. Keeps the MCP server running; the next browser tool starts or reconnects a browser. Save evidence and stop recordings and traces before calling this tool.",
+    category: 'Navigation automation',
+    args: {},
+  },
   close_heapsnapshot: {
     description:
       'Closes a previously loaded and cached memory heapsnapshot, freeing its memory. (requires flag: --memoryDebugging=true)',
